@@ -1,0 +1,17 @@
+{
+  "name": "cuentas-de-viaje",
+  "version": "1.0.0",
+  "description": "A web application to manage trip expenses, track who paid for what, and calculate settlements among participants. It allows users to create trips, add participants, log expenses with categories, and view summaries including how to settle debts.",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild index.tsx --bundle --outfile=dist/bundle.js --jsx-factory=React.createElement --jsx-fragment=React.Fragment --loader:.tsx=tsx --platform=browser --define:process.env.NODE_ENV='\"production\"' --sourcemap",
+    "dev": "esbuild index.tsx --bundle --outfile=dist/bundle.js --jsx-factory=React.createElement --jsx-fragment=React.Fragment --loader:.tsx=tsx --platform=browser --define:process.env.NODE_ENV='\"development\"' --sourcemap --servedir=. --watch"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.4"
+  }
+}

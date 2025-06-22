@@ -1,0 +1,11 @@
+
+{
+  "name": "cuentas de viaje2",
+  "description": "A web application to manage trip expenses, track who paid for what, and calculate settlements among participants. It allows users to create trips, add participants, log expenses with categories, and view summaries including how to settle debts. Also includes sections for memories (photos/videos), important info (documents, notes), maps integration, and a group chat.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ],
+  "prompt": ""
+}

@@ -1,3 +1,4 @@
+
 export enum ExpenseCategory {
   ALOJAMIENTO = 'Alojamiento',
   ACTIVIDADES = 'Actividades',
@@ -68,7 +69,7 @@ export enum InfoItemType {
   OTHER = 'Otro Documento',
 }
 
-export const INFO_ITEM_TYPES = Object.values(InfoItemType);
+export const INFO_ITEM_TYPES = Object.values(InfoItemType); // Exported for use
 
 export interface InfoItem {
   id: string;
@@ -94,4 +95,30 @@ export interface ChatMessage {
   text: string;
   timestamp: string; // ISO date string
   // isReadBy?: { [participantName: string]: boolean }; // Future enhancement
+}
+
+// --- New Types for "ITINERARIO" ---
+export enum ItineraryItemCategory { // Example categories, can be expanded
+  VISIT = 'Visita Turística',
+  MEAL = 'Comida',
+  ACTIVITY = 'Actividad Planificada',
+  TRANSPORT = 'Transporte Programado',
+  NOTE = 'Nota de Planning',
+  OTHER = 'Otro',
+}
+export const ITINERARY_ITEM_CATEGORIES = Object.values(ItineraryItemCategory);
+
+
+export interface ItineraryItem {
+  id: string;
+  tripId: string;
+  title: string;
+  date: string; // YYYY-MM-DD
+  time?: string; // HH:MM (optional)
+  category?: ItineraryItemCategory; // Optional category
+  notes?: string;
+  location?: string; // Address or name of place (optional)
+  isCompleted: boolean;
+  addedBy: string; // Participant name
+  createdAt: string; // ISO date string
 }

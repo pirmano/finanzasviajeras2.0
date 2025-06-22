@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef, forwardRef } from 'react';
-import { Trip, Expense, User, Participant, ExpenseCategory, SettledPayment, StoredUser, MediaItem, InfoItem, InfoItemType, ChatMessage, INFO_ITEM_TYPES } from './types';
+import { Trip, Expense, User, Participant, ExpenseCategory, SettledPayment, StoredUser, MediaItem, InfoItem, InfoItemType, ChatMessage, INFO_ITEM_TYPES, ItineraryItem, ItineraryItemCategory, ITINERARY_ITEM_CATEGORIES } from './types';
 import { CATEGORIES, CATEGORY_DETAILS, TEST_USER_USERNAME, TEST_USER_PASSWORD, APP_NAME, CHART_COLORS, INFO_ITEM_TYPE_DETAILS, MAIN_VIEW_ICONS, GASTOS_SUBVIEW_ICONS } from './constants';
 import useLocalStorage from './hooks/useLocalStorage';
 import useCurrentTime from './hooks/useCurrentTime';
@@ -142,11 +142,14 @@ const App: React.FC = () => {
   const [mediaItems, setMediaItems] = useLocalStorage<MediaItem[]>('travelfin-media-items', []);
   const [infoItems, setInfoItems] = useLocalStorage<InfoItem[]>('travelfin-info-items', []);
   const [chatMessages, setChatMessages] = useLocalStorage<ChatMessage[]>('travelfin-chat-messages', []);
+  const [itineraryItems, setItineraryItems] = useLocalStorage<ItineraryItem[]>('travelfin-itinerary-items', []);
   const [activeTripId, setActiveTripId] = useLocalStorage<string | null>('travelfin-activeTripId', null);
   
   const [view, setView] = useState<AppView>('auth');
   const [joinTripError, setJoinTripError] = useState<string | null>(null);
   const [showTripCodeModal, setShowTripCodeModal] = useState<string | null>(null); // Stores code of newly created trip
+  const [authFormInitialValues, setAuthFormInitialValues] = useState<{username?: string, password?: string} | null>(null);
+
 
   const currentTime = useCurrentTime({ month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
@@ -192,6 +195,11 @@ const App: React.FC = () => {
     if (!activeTripId) return [];
     return chatMessages.filter(msg => msg.tripId === activeTripId).sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
   }, [activeTripId, chatMessages]);
+  
+  const activeTripItineraryItems = useMemo(() => {
+    if (!activeTripId) return [];
+    return itineraryItems.filter(item => item.tripId === activeTripId).sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime() || (a.time || "00:00").localeCompare(b.time || "00:00"));
+  }, [activeTripId, itineraryItems]);
 
 
   const handleLogin = (username: string, pass: string): boolean => {
@@ -200,6 +208,7 @@ const App: React.FC = () => {
     );
     if (userExists) {
       setCurrentUser({ username: userExists.username });
+      setAuthFormInitialValues(null); // Clear initial values after successful login
       return true;
     }
     return false;
@@ -210,12 +219,14 @@ const App: React.FC = () => {
     if (pass !== confirmPass) return "Las contraseñas no coinciden.";
     if (storedUsers.some(user => user.username === username)) return "El nombre de usuario ya existe.";
     setStoredUsers(prev => [...prev, { username, password: pass }]);
+    setAuthFormInitialValues({ username, password: pass }); // Set initial values for login form
     return true;
   };
 
   const handleLogout = () => {
     setCurrentUser(null);
     setActiveTripId(null);
+    setAuthFormInitialValues(null);
   };
 
   const handleCreateTrip = (name: string, participantNames: string[]) => {
@@ -241,17 +252,18 @@ const App: React.FC = () => {
       setActiveTripId(tripToJoin.id);
       setView('active_trip');
     } else {
-      setJoinTripError("Viaje no encontrado con este código. Asegúrate de que los datos del viaje se han importado/compartido correctamente en este dispositivo.");
+      setJoinTripError("Viaje no encontrado con este código. Para unirte, los datos completos del viaje (no solo el código) deben haber sido importados o compartidos previamente en este dispositivo. Pídele al creador del viaje que comparta los datos si es necesario.");
     }
   };
   
   const handleDeleteTrip = (tripId: string) => {
-    if (!window.confirm("¿Estás seguro de que quieres eliminar este viaje y todos sus datos asociados (gastos, recuerdos, etc.)? Esta acción no se puede deshacer.")) return;
+    if (!window.confirm("¿Estás seguro de que quieres eliminar este viaje y todos sus datos asociados (gastos, recuerdos, info, itinerario, chat)? Esta acción no se puede deshacer.")) return;
     setTrips(prev => prev.filter(t => t.id !== tripId));
     setExpenses(prev => prev.filter(e => e.tripId !== tripId));
     setMediaItems(prev => prev.filter(m => m.tripId !== tripId));
     setInfoItems(prev => prev.filter(i => i.tripId !== tripId));
     setChatMessages(prev => prev.filter(c => c.tripId !== tripId));
+    setItineraryItems(prev => prev.filter(it => it.tripId !== tripId));
     if (activeTripId === tripId) {
       setActiveTripId(null);
       setView('trip_dashboard');
@@ -269,7 +281,7 @@ const App: React.FC = () => {
      setExpenses(prev => prev.filter(exp => exp.id !== expenseId));
   };
 
-  const handleAddMediaItem = (item: Omit<MediaItem, 'id' | 'tripId'>) => {
+  const handleAddMediaItem = (item: Omit<MediaItem, 'id' | 'tripId' | 'uploader'>) => {
     if (!activeTripId || !currentUser) return;
     const newMediaItem: MediaItem = { ...item, id: `media-${Date.now()}`, tripId: activeTripId, uploader: currentUser.username };
     setMediaItems(prev => [...prev, newMediaItem]);
@@ -310,11 +322,31 @@ const App: React.FC = () => {
       timestamp: new Date().toISOString(),
     };
     setChatMessages(prev => [...prev, newMessage]);
-    // Play sound for new message if chat is not active view (handled in ChatView)
   };
 
+  const handleAddItineraryItem = (item: Omit<ItineraryItem, 'id' | 'tripId' | 'addedBy' | 'createdAt' | 'isCompleted'>) => {
+    if (!activeTripId || !currentUser) return;
+    const newItineraryItem: ItineraryItem = {
+      ...item,
+      id: `itinerary-${Date.now()}`,
+      tripId: activeTripId,
+      addedBy: currentUser.username,
+      createdAt: new Date().toISOString(),
+      isCompleted: false,
+    };
+    setItineraryItems(prev => [...prev, newItineraryItem]);
+  };
+  const handleUpdateItineraryItem = (updatedItem: ItineraryItem) => {
+    setItineraryItems(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
+  };
+  const handleDeleteItineraryItem = (itemId: string) => {
+    if (!window.confirm("¿Eliminar este elemento del itinerario?")) return;
+    setItineraryItems(prev => prev.filter(item => item.id !== itemId));
+  };
+
+
   // --- Render Views ---
-  const renderAuthScreen = () => <AuthScreen onLogin={handleLogin} onRegister={handleRegister} />;
+  const renderAuthScreen = () => <AuthScreen onLogin={handleLogin} onRegister={handleRegister} initialValues={authFormInitialValues} />;
   
   const renderTripDashboardView = () => (
     <div className="p-4 md:p-6 flex-grow flex flex-col max-w-3xl mx-auto w-full">
@@ -370,7 +402,6 @@ const App: React.FC = () => {
             <Button type="submit">Unirse al Viaje</Button>
           </div>
         </form>
-        <p className="mt-4 text-xs text-slate-400">Pídele el código al creador del viaje. Para que el viaje aparezca, sus datos deben haber sido compartidos e importados en este dispositivo (normalmente de forma manual).</p>
       </Card>
     </div>
   );
@@ -385,6 +416,7 @@ const App: React.FC = () => {
           mediaItems: activeTripMediaItems, addMediaItem: handleAddMediaItem, deleteMediaItem: handleDeleteMediaItem,
           infoItems: activeTripInfoItems, addInfoItem: handleAddInfoItem, updateInfoItem: handleUpdateInfoItem, deleteInfoItem: handleDeleteInfoItem,
           chatMessages: activeTripChatMessages, addChatMessage: handleAddChatMessage,
+          itineraryItems: activeTripItineraryItems, addItineraryItem: handleAddItineraryItem, updateItineraryItem: handleUpdateItineraryItem, deleteItineraryItem: handleDeleteItineraryItem,
           navigateBack: () => setActiveTripId(null) 
       }}>
         <ActiveTripView onLogout={handleLogout} currentTimeGlobal={currentTime}/>
@@ -408,7 +440,7 @@ const App: React.FC = () => {
       {showTripCodeModal && activeTrip && (
         <Modal title="¡Viaje Creado!" onClose={() => setShowTripCodeModal(null)}>
           <p className="text-slate-300 mb-2">Tu nuevo viaje "{activeTrip.name}" ha sido creado.</p>
-          <p className="text-slate-300 mb-4">Comparte este código con otros participantes para que puedan unirse (necesitarán que les compartas los datos del viaje manualmente para ver la información en sus dispositivos):</p>
+          <p className="text-slate-300 mb-4">Comparte este código con otros participantes. Para que puedan ver los detalles del viaje en sus dispositivos, necesitarán que les compartas manualmente los datos del viaje (la app aún no tiene sincronización automática):</p>
           <div className="bg-slate-700 p-3 rounded-md text-center mb-4">
             <p className="text-2xl font-mono text-teal-400">{showTripCodeModal}</p>
           </div>
@@ -439,8 +471,9 @@ const Modal: React.FC<{ title: string; onClose: () => void; children: React.Reac
 interface AuthScreenProps {
   onLogin: (username: string, pass: string) => boolean;
   onRegister: (username: string, pass: string, confirmPass: string) => string | true;
+  initialValues: {username?: string, password?: string} | null;
 }
-const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, onRegister }) => {
+const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, onRegister, initialValues }) => {
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -470,7 +503,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, onRegister }) => {
             <p className="text-center text-slate-300 mb-6">Inicia sesión para gestionar tus viajes.</p>
             {error && <p className="text-sm text-red-400 mb-3 text-center">{error}</p>}
             {successMessage && <p className="text-sm text-green-400 mb-3 text-center">{successMessage}</p>}
-            <LoginForm onSubmit={handleLoginSubmit} />
+            <LoginForm onSubmit={handleLoginSubmit} initialUsername={initialValues?.username} initialPassword={initialValues?.password}/>
             <p className="mt-6 text-center text-sm"><span className="text-slate-400">¿No tienes cuenta? </span><Button variant="link" size="sm" onClick={() => { setAuthMode('register'); setError(null); setSuccessMessage(null); }} className="p-0">Regístrate aquí</Button></p>
           </>
         ) : (
@@ -486,9 +519,20 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, onRegister }) => {
   );
 };
 
-interface LoginFormProps { onSubmit: (username: string, pass: string) => void; }
-const LoginForm: React.FC<LoginFormProps> = ({ onSubmit }) => {
-  const [username, setUsername] = useState(''); const [password, setPassword] = useState('');
+interface LoginFormProps { 
+  onSubmit: (username: string, pass: string) => void; 
+  initialUsername?: string; 
+  initialPassword?: string;
+}
+const LoginForm: React.FC<LoginFormProps> = ({ onSubmit, initialUsername, initialPassword }) => {
+  const [username, setUsername] = useState(initialUsername || ''); 
+  const [password, setPassword] = useState(initialPassword || '');
+  
+  useEffect(() => { // Update if initial values change (e.g., after registration)
+    if(initialUsername) setUsername(initialUsername);
+    if(initialPassword) setPassword(initialPassword);
+  }, [initialUsername, initialPassword]);
+
   const handleSubmit = (e: React.FormEvent) => { e.preventDefault(); onSubmit(username, password); };
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
@@ -582,6 +626,10 @@ interface ActiveTripContextType {
   deleteInfoItem: (itemId: string) => void;
   chatMessages: ChatMessage[];
   addChatMessage: (text: string) => void;
+  itineraryItems: ItineraryItem[];
+  addItineraryItem: (item: Omit<ItineraryItem, 'id' | 'tripId' | 'addedBy' | 'createdAt' | 'isCompleted'>) => void;
+  updateItineraryItem: (updatedItem: ItineraryItem) => void;
+  deleteItineraryItem: (itemId: string) => void;
   navigateBack: () => void;
 }
 
@@ -593,7 +641,7 @@ const useActiveTrip = () => {
   return context;
 };
 
-type MainTripView = 'GASTOS' | 'RECUERDOS' | 'INFO' | 'MAPAS' | 'CHAT';
+type MainTripView = 'GASTOS' | 'RECUERDOS' | 'INFO' | 'MAPAS' | 'CHAT' | 'ITINERARIO';
 type GastosSubView = 'list' | 'add' | 'summary' | 'calendar';
 
 
@@ -602,7 +650,7 @@ const ActiveTripView: React.FC<{onLogout: () => void; currentTimeGlobal: string}
   const [currentMainView, setCurrentMainView] = useState<MainTripView>('GASTOS');
   const [unreadMessages, setUnreadMessages] = useState(0); 
   const chatAudioRef = useRef<HTMLAudioElement | null>(null);
-  const { chatMessages, currentUser } = useActiveTrip(); // Get chatMessages for unread logic
+  const { chatMessages, currentUser } = useActiveTrip(); 
 
   useEffect(() => {
     if (typeof Audio !== "undefined") {
@@ -611,16 +659,11 @@ const ActiveTripView: React.FC<{onLogout: () => void; currentTimeGlobal: string}
     }
   }, []);
   
-  // Effect to update unread count when new messages arrive and chat is not the current view
   useEffect(() => {
     if (currentMainView !== 'CHAT' && chatMessages.length > 0) {
       const lastMessage = chatMessages[chatMessages.length - 1];
-      // Only count if last message is not from current user and potentially "new" (simplistic check)
-      // A more robust solution would involve message read receipts
       if (lastMessage && lastMessage.sender !== currentUser.username) {
-         // This is a simple way to count unread messages.
-         // A more complex app might track last read timestamp per user.
-         setUnreadMessages(prev => prev + 1); // Increment for each new message not from self when chat not open
+         setUnreadMessages(prev => prev + 1); 
          if (chatAudioRef.current) {
             chatAudioRef.current.play().catch(e => console.error("Error playing sound:", e));
          }
@@ -636,11 +679,12 @@ const ActiveTripView: React.FC<{onLogout: () => void; currentTimeGlobal: string}
       case 'INFO': return <InfoView />;
       case 'MAPAS': return <MapasView />;
       case 'CHAT': return <ChatView />;
+      case 'ITINERARIO': return <ItinerarioView />;
       default: return <p>Sección no encontrada.</p>;
     }
   };
 
-  const mainViews: MainTripView[] = ['GASTOS', 'RECUERDOS', 'INFO', 'MAPAS', 'CHAT'];
+  const mainViews: MainTripView[] = ['GASTOS', 'RECUERDOS', 'INFO', 'MAPAS', 'CHAT', 'ITINERARIO'];
 
   return (
     <div className="flex-grow flex flex-col p-4 md:p-6 max-w-4xl mx-auto w-full"> 
@@ -993,7 +1037,7 @@ const GastosCalendarView: React.FC<{ expenses: Expense[] }> = ({ expenses }) => 
           key={day} 
           className={`border border-slate-700 p-2 h-24 flex flex-col cursor-pointer hover:bg-slate-700 relative transition-colors ${isToday ? 'bg-teal-900/70' : ''} ${isSelected ? 'ring-2 ring-teal-500 bg-slate-700' : ''}`}
           onClick={() => {
-            setSelectedDateExpenses(expensesByDate.get(dateStr) || []); // Return empty array if no expenses to avoid null for list
+            setSelectedDateExpenses(expensesByDate.get(dateStr) || []); 
             setSelectedDateKey(dateStr);
           }}
           role="button"
@@ -1085,7 +1129,7 @@ const RecuerdosView: React.FC = () => {
       description: description.trim() || undefined,
     });
     setFile(null); setDescription(''); setPreview(null);
-    if (fileInputRef.current) fileInputRef.current.value = ''; // Reset file input
+    if (fileInputRef.current) fileInputRef.current.value = ''; 
   };
 
   return (
@@ -1164,6 +1208,8 @@ const InfoView: React.FC = () => {
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const [micPermissionError, setMicPermissionError] = useState<string | null>(null);
+
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     setNewItem(prev => ({ ...prev, [e.target.name]: e.target.value }));
@@ -1188,11 +1234,15 @@ const InfoView: React.FC = () => {
     setShowForm(false);
     setIsRecording(false);
     audioChunksRef.current = [];
+    setMicPermissionError(null);
   }
 
   const startRecording = async () => {
+    setMicPermissionError(null);
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        alert("Tu navegador no soporta la grabación de audio.");
+        const errorMsg = "Tu navegador no soporta la grabación de audio.";
+        alert(errorMsg);
+        setMicPermissionError(errorMsg);
         return;
     }
     try {
@@ -1201,7 +1251,7 @@ const InfoView: React.FC = () => {
       audioChunksRef.current = [];
       mediaRecorderRef.current.ondataavailable = event => audioChunksRef.current.push(event.data);
       mediaRecorderRef.current.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' }); // Specify WAV type
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' }); 
         const reader = new FileReader();
         reader.onloadend = () => {
           setFilePreview(reader.result as string); 
@@ -1212,9 +1262,18 @@ const InfoView: React.FC = () => {
       };
       mediaRecorderRef.current.start();
       setIsRecording(true);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error al acceder al micrófono:", err);
-      alert("No se pudo acceder al micrófono. Asegúrate de haber dado permiso y que no esté siendo usado por otra aplicación.");
+      let userMessage = "No se pudo acceder al micrófono. ";
+      if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+        userMessage += "Has denegado el permiso. Por favor, revisa la configuración de permisos de este sitio en tu navegador.";
+      } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+        userMessage += "No se encontró un micrófono conectado.";
+      } else {
+        userMessage += "Asegúrate de haber dado permiso y que no esté siendo usado por otra aplicación.";
+      }
+      alert(userMessage);
+      setMicPermissionError(userMessage);
     }
   };
 
@@ -1231,7 +1290,7 @@ const InfoView: React.FC = () => {
     addInfoItem({
       title: newItem.title,
       type: newItem.type,
-      details: newItem.type === InfoItemType.NOTE_TEXT ? newItem.details : undefined, // Only store details for text notes via this field
+      details: newItem.type === InfoItemType.NOTE_TEXT ? newItem.details : (newItem.type !== InfoItemType.NOTE_AUDIO && newItem.details ? newItem.details : undefined ),
       date: newItem.date || undefined,
       time: newItem.time || undefined,
       fileDataUrl: filePreview || undefined, 
@@ -1247,7 +1306,7 @@ const InfoView: React.FC = () => {
   return (
     <div className="space-y-6">
       <div className="flex justify-end">
-        <Button onClick={() => setShowForm(s => !s)} iconLeft={showForm ? <MinusIcon className="w-5 h-5"/> : <PlusIcon className="w-5 h-5"/>}>
+        <Button onClick={() => setShowForm(s => { if(s) resetFormState(); return !s; })} iconLeft={showForm ? <MinusIcon className="w-5 h-5"/> : <PlusIcon className="w-5 h-5"/>}>
           {showForm ? 'Cancelar' : 'Añadir Información'}
         </Button>
       </div>
@@ -1255,9 +1314,10 @@ const InfoView: React.FC = () => {
       {showForm && (
         <Card>
           <h2 className="text-xl font-semibold text-slate-100 mb-4">Nueva Información</h2>
+          {micPermissionError && <p className="text-sm text-red-400 mb-3">{micPermissionError}</p>}
           <form onSubmit={handleSubmit} className="space-y-4">
             <Input label="Título" name="title" value={newItem.title} onChange={handleInputChange} required />
-            <Select label="Tipo" name="type" value={newItem.type} onChange={e => { setNewItem(prev => ({ ...prev, type: e.target.value as InfoItemType, file: null, details: '' })); setFilePreview(null); if(infoFileInputRef.current) infoFileInputRef.current.value = ''; setIsRecording(false); audioChunksRef.current = []; }}>
+            <Select label="Tipo" name="type" value={newItem.type} onChange={e => { setNewItem(prev => ({ ...prev, type: e.target.value as InfoItemType, file: null, details: '' })); setFilePreview(null); if(infoFileInputRef.current) infoFileInputRef.current.value = ''; setIsRecording(false); audioChunksRef.current = []; setMicPermissionError(null);}}>
               {INFO_ITEM_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
             </Select>
             
@@ -1336,7 +1396,7 @@ const InfoView: React.FC = () => {
                     <Button variant="link" size="sm" className="p-0 text-xs" onClick={() => { const a = document.createElement('a'); a.href = item.fileDataUrl!; a.download = item.fileName || 'archivo'; a.click(); }}>
                       Descargar: {item.fileName || 'archivo'}
                     </Button>
-                    {(item.type !== InfoItemType.NOTE_TEXT && item.type !== InfoItemType.NOTE_AUDIO && item.details) && <p className="text-sm text-slate-300 mt-1 whitespace-pre-wrap">{item.details}</p> /* Description for other files */}
+                    {(item.type !== InfoItemType.NOTE_TEXT && item.type !== InfoItemType.NOTE_AUDIO && item.details) && <p className="text-sm text-slate-300 mt-1 whitespace-pre-wrap">{item.details}</p> }
                   </div>
                 )}
                 <p className="text-xs text-slate-500 mt-1">Añadido por: {item.addedBy} el {formatDate(item.createdAt.split('T')[0], {day:'numeric', month:'short'})}</p>
@@ -1366,6 +1426,8 @@ const MapasView: React.FC = () => {
   const { trip } = useActiveTrip();
   const [userLocation, setUserLocation] = useState<{latitude: number, longitude: number} | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [customSearchQuery, setCustomSearchQuery] = useState('');
+
 
   useEffect(() => {
     if (navigator.geolocation) {
@@ -1384,22 +1446,30 @@ const MapasView: React.FC = () => {
     }
   }, []);
 
-  const openGoogleMaps = (query: string) => {
+  const openGoogleMaps = (query: string, isCustomSearch: boolean = false) => {
     let mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
-    // Using trip name might be too broad, better to search near user or specific city if available
-    // For now, let's keep it simple: search for "query near trip.name (city)" or "query near current location"
-    
-    // Attempt to refine query. This is a very basic approach.
-    // A more robust solution would involve asking user for the trip's main city/location.
     const tripLocationContext = trip.name.includes("en ") ? trip.name.split("en ")[1] : trip.name;
 
     if (userLocation) {
-      mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}&ll=${userLocation.latitude},${userLocation.longitude}`;
+      // For custom search, use the query directly. For predefined categories, add context.
+      if (isCustomSearch) {
+        mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`; // Search anywhere
+      } else {
+        mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}&ll=${userLocation.latitude},${userLocation.longitude}`;
+      }
     } else {
-      mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query + " en " + tripLocationContext)}`;
+      mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query + (isCustomSearch ? "" : " en " + tripLocationContext))}`;
     }
     window.open(mapsUrl, '_blank', 'noopener,noreferrer');
   };
+  
+  const handleCustomSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (customSearchQuery.trim()) {
+      openGoogleMaps(customSearchQuery.trim(), true);
+    }
+  };
+
 
   return (
     <Card>
@@ -1411,13 +1481,27 @@ const MapasView: React.FC = () => {
       {!locationError && !userLocation && <p className="text-xs text-slate-400 mb-3">Obteniendo tu ubicación para búsquedas más precisas...</p>}
       {!locationError && userLocation && <p className="text-xs text-green-400 mb-3">Ubicación obtenida. Las búsquedas usarán tu posición actual.</p>}
       
-      <div className="space-y-3">
-        <Button onClick={() => openGoogleMaps(`restaurantes`)} variant="secondary" className="w-full justify-start" iconLeft={<BuildingStorefrontIcon className="w-5 h-5"/>}>Restaurantes y Comida</Button>
-        <Button onClick={() => openGoogleMaps(`atracciones turísticas`)} variant="secondary" className="w-full justify-start" iconLeft={<TicketIcon className="w-5 h-5"/>}>Atracciones y Visitas</Button>
-        <Button onClick={() => openGoogleMaps(`hoteles`)} variant="secondary" className="w-full justify-start" iconLeft={<BuildingOffice2Icon className="w-5 h-5"/>}>Alojamiento</Button>
-        <Button onClick={() => openGoogleMaps(`supermercados`)} variant="secondary" className="w-full justify-start" iconLeft={<ShoppingCartIcon className="w-5 h-5"/>}>Supermercados</Button>
+      <div className="space-y-3 mb-6">
+        <Button onClick={() => openGoogleMaps(`restaurantes`)} variant="secondary" className="w-full justify-start" iconLeft={<BuildingStorefrontIcon className="w-5 h-5"/>}>Restaurantes</Button>
+        <Button onClick={() => openGoogleMaps(`atracciones y visitas`)} variant="secondary" className="w-full justify-start" iconLeft={<TicketIcon className="w-5 h-5"/>}>Atracciones y Visitas</Button>
+        <Button onClick={() => openGoogleMaps(`alojamientos`)} variant="secondary" className="w-full justify-start" iconLeft={<BuildingOffice2Icon className="w-5 h-5"/>}>Alojamientos</Button>
+        <Button onClick={() => openGoogleMaps(`tiendas`)} variant="secondary" className="w-full justify-start" iconLeft={<ShoppingCartIcon className="w-5 h-5"/>}>Tiendas</Button>
       </div>
-       <p className="text-xs text-slate-500 mt-4">Esta función abrirá Google Maps en una nueva pestaña.</p>
+      
+      <form onSubmit={handleCustomSearch} className="space-y-2 border-t border-slate-700 pt-4">
+        <Input 
+          label="Buscar por nombre:"
+          type="text" 
+          value={customSearchQuery} 
+          onChange={e => setCustomSearchQuery(e.target.value)} 
+          placeholder="Ej: Museo del Prado, Torre Eiffel..."
+          className="flex-grow"
+          aria-label="Buscar lugar por nombre"
+        />
+        <Button type="submit" className="w-full" iconLeft={<MagnifyingGlassIcon className="w-5 h-5"/>}>Buscar Lugar</Button>
+      </form>
+
+      <p className="text-xs text-slate-500 mt-4">Esta función abrirá Google Maps en una nueva pestaña.</p>
     </Card>
   );
 };
@@ -1441,7 +1525,7 @@ const ChatView: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-280px)] md:h-[calc(100vh-250px)]"> {/* Adjust height as needed */}
+    <div className="flex flex-col h-[calc(100vh-280px)] md:h-[calc(100vh-250px)]"> 
       <Card className="flex-grow overflow-y-auto mb-4" noPadding>
         <div className="p-4 space-y-3">
         {chatMessages.length === 0 ? (
@@ -1476,6 +1560,128 @@ const ChatView: React.FC = () => {
   );
 };
 
+// --- ITINERARIO Section ---
+const ItinerarioView: React.FC = () => {
+  const { trip, itineraryItems, addItineraryItem, updateItineraryItem, deleteItineraryItem, currentUser } = useActiveTrip();
+  const [showForm, setShowForm] = useState(false);
+  const todayDate = new Date().toISOString().split('T')[0];
+  const [newItem, setNewItem] = useState({ title: '', date: todayDate, time: '', category: ITINERARY_ITEM_CATEGORIES[0], notes: '', location: '' });
+  
+  const resetForm = () => {
+    setNewItem({ title: '', date: todayDate, time: '', category: ITINERARY_ITEM_CATEGORIES[0], notes: '', location: '' });
+    setShowForm(false);
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
+    setNewItem(prev => ({ ...prev, [e.target.name]: e.target.value }));
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newItem.title.trim() || !newItem.date.trim()) { alert("El título y la fecha son obligatorios."); return; }
+    addItineraryItem({
+      title: newItem.title.trim(),
+      date: newItem.date,
+      time: newItem.time || undefined,
+      category: newItem.category,
+      notes: newItem.notes.trim() || undefined,
+      location: newItem.location.trim() || undefined,
+    });
+    resetForm();
+  };
+  
+  const toggleComplete = (item: ItineraryItem) => {
+    updateItineraryItem({ ...item, isCompleted: !item.isCompleted });
+  };
+
+  const itemsByDate = useMemo(() => {
+    const grouped: Record<string, ItineraryItem[]> = {};
+    itineraryItems.forEach(item => {
+      if (!grouped[item.date]) grouped[item.date] = [];
+      grouped[item.date].push(item);
+    });
+    // Sort items within each date by time
+    for (const date in grouped) {
+        grouped[date].sort((a, b) => (a.time || "00:00").localeCompare(b.time || "00:00"));
+    }
+    return grouped;
+  }, [itineraryItems]);
+
+  const sortedDates = useMemo(() => Object.keys(itemsByDate).sort((a,b) => new Date(a).getTime() - new Date(b).getTime()), [itemsByDate]);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-end">
+        <Button onClick={() => setShowForm(s => !s)} iconLeft={showForm ? <MinusIcon className="w-5 h-5"/> : <PlusIcon className="w-5 h-5"/>}>
+          {showForm ? 'Cancelar Nuevo' : 'Añadir al Itinerario'}
+        </Button>
+      </div>
+
+      {showForm && (
+        <Card>
+          <h2 className="text-xl font-semibold text-slate-100 mb-4">Nuevo Elemento del Itinerario</h2>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <Input label="Título / Actividad" name="title" value={newItem.title} onChange={handleInputChange} required />
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Fecha" name="date" type="date" value={newItem.date} onChange={handleInputChange} required />
+              <Input label="Hora (Opcional)" name="time" type="time" value={newItem.time} onChange={handleInputChange} />
+            </div>
+            <Input label="Lugar / Dirección (Opcional)" name="location" value={newItem.location} onChange={handleInputChange} placeholder="Ej: Museo del Louvre, París"/>
+             <Select label="Categoría (Opcional)" name="category" value={newItem.category} onChange={e => setNewItem(p => ({...p, category: e.target.value as ItineraryItemCategory}))}>
+                {ITINERARY_ITEM_CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+            </Select>
+            <Textarea label="Notas (Opcional)" name="notes" value={newItem.notes} onChange={handleInputChange} rows={3} />
+            <Button type="submit">Guardar Elemento</Button>
+          </form>
+        </Card>
+      )}
+
+      {sortedDates.length === 0 && !showForm ? (
+        <Card className="text-center py-10">
+          <CalendarDaysIcon className="w-16 h-16 text-slate-600 mx-auto mb-3" />
+          <p className="text-slate-300">Tu itinerario está vacío. ¡Añade planes!</p>
+        </Card>
+      ) : (
+        sortedDates.map(date => (
+          <div key={date}>
+            <h3 className="text-lg font-semibold text-teal-400 my-3 sticky top-0 bg-black py-2 z-10">{formatDate(date, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</h3>
+            <div className="space-y-3">
+              {itemsByDate[date].map(item => (
+                <Card key={item.id} className={`border-l-4 ${item.isCompleted ? 'border-green-600 opacity-70' : 'border-sky-500'}`}>
+                   <div className="flex justify-between items-start">
+                    <div>
+                      <div className="flex items-center space-x-2">
+                         {item.time && <span className="text-sm font-semibold text-teal-300 bg-slate-700 px-2 py-0.5 rounded">{item.time}</span>}
+                         <h4 className="text-md font-semibold text-slate-100">{item.title}</h4>
+                      </div>
+                      {item.category && <p className="text-xs text-slate-400">{item.category}</p>}
+                      {item.location && <p className="text-sm text-slate-300"><MapPinIcon className="w-3.5 h-3.5 inline mr-1"/>{item.location}</p>}
+                      {item.notes && <p className="text-sm text-slate-300 mt-1 whitespace-pre-wrap">{item.notes}</p>}
+                      <p className="text-xs text-slate-500 mt-1">Añadido por: {item.addedBy}</p>
+                    </div>
+                    <div className="flex flex-col items-end space-y-2 flex-shrink-0 ml-2">
+                      <label className="flex items-center space-x-1 cursor-pointer">
+                        <Input type="checkbox" checked={item.isCompleted} onChange={() => toggleComplete(item)} className="form-checkbox h-5 w-5 text-teal-500 rounded border-slate-500 bg-slate-700 focus:ring-teal-400 focus:ring-offset-slate-800" aria-label="Marcar como completado"/>
+                        <span className="text-xs text-slate-300 select-none">Hecho</span>
+                      </label>
+                      {item.addedBy === currentUser.username && (
+                        <Button variant="ghost" size="sm" onClick={() => deleteItineraryItem(item.id)} className="p-1 text-red-400 hover:text-red-500" aria-label="Eliminar del itinerario">
+                          <TrashIcon className="w-4 h-4"/>
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  );
+};
+
+
 
 // --- Icons (simple inline SVGs for brevity) ---
 const PlusIcon: React.FC<{className?: string}> = ({className="w-6 h-6"}) => <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>;
@@ -1498,5 +1704,9 @@ const TicketIcon: React.FC<{className?: string}> = ({className="w-6 h-6"}) => <s
 const BuildingOffice2Icon: React.FC<{className?: string}> = ({className="w-6 h-6"}) => <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h6.375a.375.375 0 01.375.375v1.5a.375.375 0 01-.375.375H9a.375.375 0 01-.375-.375v-1.5A.375.375 0 019 6.75zM9 12.75h6.375a.375.375 0 01.375.375v1.5a.375.375 0 01-.375.375H9a.375.375 0 01-.375-.375v-1.5A.375.375 0 019 12.75zM12 3v2.25m0 16.5v-2.25M12 6.75v10.5" /></svg>;
 const ShoppingCartIcon: React.FC<{className?: string}> = ({className="w-6 h-6"}) => <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 3h1.386c.51 0 .955.343 1.087.835l.383 1.437M7.5 14.25a3 3 0 00-3 3h15.75m-12.75-3h11.218c1.121-2.3 2.1-4.684 2.924-7.138a60.114 60.114 0 00-16.536-1.84M7.5 14.25L5.106 5.272M6 20.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zm12.75 0a.75.75 0 11-1.5 0 .75.75 0 011.5 0z" /></svg>;
 const PaperAirplaneIcon: React.FC<{className?: string}> = ({className="w-6 h-6"}) => <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}><path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" /></svg>;
+const CalendarDaysIcon: React.FC<{className?: string}> = ({className="w-6 h-6"}) => <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}><path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25M3 18.75A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5m-9-3.75h.008v.008H12v-.008zM12 15h.008v.008H12V15zm0 2.25h.008v.008H12v-.008zM9.75 15h.008v.008H9.75V15zm0 2.25h.008v.008H9.75v-.008zM7.5 15h.008v.008H7.5V15zm0 2.25h.008v.008H7.5v-.008z" /></svg>;
+const MapPinIcon: React.FC<{className?: string}> = ({className="w-6 h-6"}) => <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}><path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" /></svg>;
+const MagnifyingGlassIcon: React.FC<{className?: string}> = ({className="w-6 h-6"}) => <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" /></svg>;
+
 
 export default App;

@@ -1,6 +1,5 @@
-
 import React, { useState, useEffect, useCallback, useMemo, useRef, forwardRef } from 'react';
-import { Trip, Expense, User, Participant, ExpenseCategory, SettledPayment, StoredUser, MediaItem, InfoItem, InfoItemType, ChatMessage, INFO_ITEM_TYPES, ItineraryItem, ItineraryItemCategory, ITINERARY_ITEM_CATEGORIES } from './types';
+import { Trip, Expense, User, Participant, ExpenseCategory, SettledPayment, StoredUser, MediaItem, InfoItem, InfoItemType, ChatMessage, INFO_ITEM_TYPES, ItineraryItem, ItineraryItemCategory, ITINERARY_ITEM_CATEGORIES, MarkedLocation } from './types';
 import { CATEGORIES, CATEGORY_DETAILS, TEST_USER_USERNAME, TEST_USER_PASSWORD, APP_NAME, CHART_COLORS, INFO_ITEM_TYPE_DETAILS, MAIN_VIEW_ICONS, GASTOS_SUBVIEW_ICONS } from './constants';
 import useLocalStorage from './hooks/useLocalStorage';
 import useCurrentTime from './hooks/useCurrentTime';
@@ -143,6 +142,7 @@ const App: React.FC = () => {
   const [infoItems, setInfoItems] = useLocalStorage<InfoItem[]>('travelfin-info-items', []);
   const [chatMessages, setChatMessages] = useLocalStorage<ChatMessage[]>('travelfin-chat-messages', []);
   const [itineraryItems, setItineraryItems] = useLocalStorage<ItineraryItem[]>('travelfin-itinerary-items', []);
+  const [markedMapLocations, setMarkedMapLocations] = useLocalStorage<MarkedLocation[]>('travelfin-marked-locations', []);
   const [activeTripId, setActiveTripId] = useLocalStorage<string | null>('travelfin-activeTripId', null);
   
   const [view, setView] = useState<AppView>('auth');
@@ -201,6 +201,11 @@ const App: React.FC = () => {
     return itineraryItems.filter(item => item.tripId === activeTripId).sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime() || (a.time || "00:00").localeCompare(b.time || "00:00"));
   }, [activeTripId, itineraryItems]);
 
+  const activeTripMarkedLocations = useMemo(() => {
+    if(!activeTripId) return [];
+    return markedMapLocations.filter(loc => loc.tripId === activeTripId).sort((a,b) => new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime());
+  }, [activeTripId, markedMapLocations]);
+
 
   const handleLogin = (username: string, pass: string): boolean => {
     const userExists = storedUsers.find(
@@ -257,13 +262,14 @@ const App: React.FC = () => {
   };
   
   const handleDeleteTrip = (tripId: string) => {
-    if (!window.confirm("¿Estás seguro de que quieres eliminar este viaje y todos sus datos asociados (gastos, recuerdos, info, itinerario, chat)? Esta acción no se puede deshacer.")) return;
+    if (!window.confirm("¿Estás seguro de que quieres eliminar este viaje y todos sus datos asociados (gastos, recuerdos, info, itinerario, chat, lugares marcados)? Esta acción no se puede deshacer.")) return;
     setTrips(prev => prev.filter(t => t.id !== tripId));
     setExpenses(prev => prev.filter(e => e.tripId !== tripId));
     setMediaItems(prev => prev.filter(m => m.tripId !== tripId));
     setInfoItems(prev => prev.filter(i => i.tripId !== tripId));
     setChatMessages(prev => prev.filter(c => c.tripId !== tripId));
     setItineraryItems(prev => prev.filter(it => it.tripId !== tripId));
+    setMarkedMapLocations(prev => prev.filter(ml => ml.tripId !== tripId));
     if (activeTripId === tripId) {
       setActiveTripId(null);
       setView('trip_dashboard');
@@ -344,6 +350,22 @@ const App: React.FC = () => {
     setItineraryItems(prev => prev.filter(item => item.id !== itemId));
   };
 
+  const handleAddMarkedMapLocation = (name: string, query: string) => {
+    if(!activeTripId || !name.trim() || !query.trim()) return;
+    const newLocation: MarkedLocation = {
+        id: `maploc-${Date.now()}`,
+        tripId: activeTripId,
+        name: name.trim(),
+        query: query.trim(),
+        addedAt: new Date().toISOString(),
+    };
+    setMarkedMapLocations(prev => [...prev, newLocation]);
+  };
+  const handleDeleteMarkedMapLocation = (locationId: string) => {
+    if(!window.confirm("¿Eliminar este lugar guardado del mapa?")) return;
+    setMarkedMapLocations(prev => prev.filter(loc => loc.id !== locationId));
+  };
+
 
   // --- Render Views ---
   const renderAuthScreen = () => <AuthScreen onLogin={handleLogin} onRegister={handleRegister} initialValues={authFormInitialValues} />;
@@ -417,6 +439,7 @@ const App: React.FC = () => {
           infoItems: activeTripInfoItems, addInfoItem: handleAddInfoItem, updateInfoItem: handleUpdateInfoItem, deleteInfoItem: handleDeleteInfoItem,
           chatMessages: activeTripChatMessages, addChatMessage: handleAddChatMessage,
           itineraryItems: activeTripItineraryItems, addItineraryItem: handleAddItineraryItem, updateItineraryItem: handleUpdateItineraryItem, deleteItineraryItem: handleDeleteItineraryItem,
+          markedMapLocations: activeTripMarkedLocations, addMarkedMapLocation: handleAddMarkedMapLocation, deleteMarkedMapLocation: handleDeleteMarkedMapLocation,
           navigateBack: () => setActiveTripId(null) 
       }}>
         <ActiveTripView onLogout={handleLogout} currentTimeGlobal={currentTime}/>
@@ -630,6 +653,9 @@ interface ActiveTripContextType {
   addItineraryItem: (item: Omit<ItineraryItem, 'id' | 'tripId' | 'addedBy' | 'createdAt' | 'isCompleted'>) => void;
   updateItineraryItem: (updatedItem: ItineraryItem) => void;
   deleteItineraryItem: (itemId: string) => void;
+  markedMapLocations: MarkedLocation[];
+  addMarkedMapLocation: (name: string, query: string) => void;
+  deleteMarkedMapLocation: (locationId: string) => void;
   navigateBack: () => void;
 }
 
@@ -1423,10 +1449,12 @@ const InfoView: React.FC = () => {
 
 // --- MAPAS Section ---
 const MapasView: React.FC = () => {
-  const { trip } = useActiveTrip();
+  const { trip, markedMapLocations, addMarkedMapLocation, deleteMarkedMapLocation } = useActiveTrip();
   const [userLocation, setUserLocation] = useState<{latitude: number, longitude: number} | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [customSearchQuery, setCustomSearchQuery] = useState('');
+  const [showSaveLocationModal, setShowSaveLocationModal] = useState<string | null>(null); // Stores search query to be saved
+  const [saveLocationName, setSaveLocationName] = useState('');
 
 
   useEffect(() => {
@@ -1446,63 +1474,134 @@ const MapasView: React.FC = () => {
     }
   }, []);
 
-  const openGoogleMaps = (query: string, isCustomSearch: boolean = false) => {
+  const openGoogleMaps = (query: string) => {
     let mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
     const tripLocationContext = trip.name.includes("en ") ? trip.name.split("en ")[1] : trip.name;
 
     if (userLocation) {
-      // For custom search, use the query directly. For predefined categories, add context.
-      if (isCustomSearch) {
-        mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`; // Search anywhere
-      } else {
         mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}&ll=${userLocation.latitude},${userLocation.longitude}`;
-      }
     } else {
-      mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query + (isCustomSearch ? "" : " en " + tripLocationContext))}`;
+      // If no user location, append trip context for non-specific queries (quick searches)
+      // For specific place names, usually less necessary to add "en [trip context]"
+       if (!query.toLowerCase().includes(tripLocationContext.toLowerCase()) && 
+           !['restaurantes', 'atracciones y visitas', 'alojamientos', 'tiendas'].some(cat => query.toLowerCase().startsWith(cat))) {
+         // This logic is a bit tricky; for a specific search like "Torre Eiffel", adding "en Paris" might be redundant if "Paris" is the trip name.
+         // But for a generic "restaurantes", adding "en Paris" is helpful.
+         // Current implementation keeps it simple: search query as is.
+       }
     }
     window.open(mapsUrl, '_blank', 'noopener,noreferrer');
   };
   
   const handleCustomSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    if (customSearchQuery.trim()) {
-      openGoogleMaps(customSearchQuery.trim(), true);
+    const query = customSearchQuery.trim();
+    if (query) {
+      openGoogleMaps(query);
+      setShowSaveLocationModal(query); // Offer to save this search
+      setSaveLocationName(query); // Pre-fill name with query
+    }
+  };
+  
+  const handleSaveLocation = () => {
+    if (showSaveLocationModal && saveLocationName.trim()) {
+      addMarkedMapLocation(saveLocationName.trim(), showSaveLocationModal);
+      setShowSaveLocationModal(null);
+      setSaveLocationName('');
+      setCustomSearchQuery(''); // Clear search bar after saving
     }
   };
 
 
   return (
-    <Card>
-      <h2 className="text-xl font-semibold text-slate-100 mb-4">Explorar en Mapas</h2>
-      <p className="text-slate-300 mb-1">
-        Encuentra lugares de interés para tu viaje "{trip.name}".
-      </p>
-      {locationError && <p className="text-xs text-amber-400 mb-3">{locationError}</p>}
-      {!locationError && !userLocation && <p className="text-xs text-slate-400 mb-3">Obteniendo tu ubicación para búsquedas más precisas...</p>}
-      {!locationError && userLocation && <p className="text-xs text-green-400 mb-3">Ubicación obtenida. Las búsquedas usarán tu posición actual.</p>}
-      
-      <div className="space-y-3 mb-6">
-        <Button onClick={() => openGoogleMaps(`restaurantes`)} variant="secondary" className="w-full justify-start" iconLeft={<BuildingStorefrontIcon className="w-5 h-5"/>}>Restaurantes</Button>
-        <Button onClick={() => openGoogleMaps(`atracciones y visitas`)} variant="secondary" className="w-full justify-start" iconLeft={<TicketIcon className="w-5 h-5"/>}>Atracciones y Visitas</Button>
-        <Button onClick={() => openGoogleMaps(`alojamientos`)} variant="secondary" className="w-full justify-start" iconLeft={<BuildingOffice2Icon className="w-5 h-5"/>}>Alojamientos</Button>
-        <Button onClick={() => openGoogleMaps(`tiendas`)} variant="secondary" className="w-full justify-start" iconLeft={<ShoppingCartIcon className="w-5 h-5"/>}>Tiendas</Button>
-      </div>
-      
-      <form onSubmit={handleCustomSearch} className="space-y-2 border-t border-slate-700 pt-4">
-        <Input 
-          label="Buscar por nombre:"
-          type="text" 
-          value={customSearchQuery} 
-          onChange={e => setCustomSearchQuery(e.target.value)} 
-          placeholder="Ej: Museo del Prado, Torre Eiffel..."
-          className="flex-grow"
-          aria-label="Buscar lugar por nombre"
-        />
-        <Button type="submit" className="w-full" iconLeft={<MagnifyingGlassIcon className="w-5 h-5"/>}>Buscar Lugar</Button>
-      </form>
+    <div className="space-y-6">
+      <Card>
+        <h2 className="text-xl font-semibold text-slate-100 mb-4">Explorar en Mapas</h2>
+        <p className="text-slate-300 mb-1">
+          Encuentra lugares de interés para tu viaje "{trip.name}".
+        </p>
+        {locationError && <p className="text-xs text-amber-400 mb-3">{locationError}</p>}
+        {!locationError && !userLocation && <p className="text-xs text-slate-400 mb-3">Obteniendo tu ubicación para búsquedas más precisas...</p>}
+        {!locationError && userLocation && <p className="text-xs text-green-400 mb-3">Ubicación obtenida. Las búsquedas usarán tu posición actual.</p>}
+        
+        <div className="space-y-3 mb-6">
+          <Button onClick={() => openGoogleMaps(`restaurantes cerca de ${userLocation ? `${userLocation.latitude},${userLocation.longitude}` : trip.name}`)} variant="secondary" className="w-full justify-start" iconLeft={<BuildingStorefrontIcon className="w-5 h-5"/>}>Restaurantes</Button>
+          <Button onClick={() => openGoogleMaps(`atracciones y visitas cerca de ${userLocation ? `${userLocation.latitude},${userLocation.longitude}` : trip.name}`)} variant="secondary" className="w-full justify-start" iconLeft={<TicketIcon className="w-5 h-5"/>}>Atracciones y Visitas</Button>
+          <Button onClick={() => openGoogleMaps(`alojamientos cerca de ${userLocation ? `${userLocation.latitude},${userLocation.longitude}` : trip.name}`)} variant="secondary" className="w-full justify-start" iconLeft={<BuildingOffice2Icon className="w-5 h-5"/>}>Alojamientos</Button>
+          <Button onClick={() => openGoogleMaps(`tiendas cerca de ${userLocation ? `${userLocation.latitude},${userLocation.longitude}` : trip.name}`)} variant="secondary" className="w-full justify-start" iconLeft={<ShoppingCartIcon className="w-5 h-5"/>}>Tiendas</Button>
+        </div>
+        
+        <form onSubmit={handleCustomSearch} className="space-y-2 border-t border-slate-700 pt-4">
+          <Input 
+            label="Buscar lugar específico:"
+            type="text" 
+            value={customSearchQuery} 
+            onChange={e => setCustomSearchQuery(e.target.value)} 
+            placeholder="Ej: Museo del Prado, Torre Eiffel..."
+            className="flex-grow"
+            aria-label="Buscar lugar por nombre"
+          />
+          <Button type="submit" className="w-full" iconLeft={<MagnifyingGlassIcon className="w-5 h-5"/>}>Buscar Lugar</Button>
+        </form>
+        <p className="text-xs text-slate-500 mt-4">Esta función abrirá Google Maps en una nueva pestaña.</p>
+      </Card>
 
-      <p className="text-xs text-slate-500 mt-4">Esta función abrirá Google Maps en una nueva pestaña.</p>
-    </Card>
+      {showSaveLocationModal && (
+        <Modal title="Guardar Lugar Buscado" onClose={() => setShowSaveLocationModal(null)}>
+            <p className="text-slate-300 mb-2">Has buscado: <span className="font-semibold text-teal-300">{showSaveLocationModal}</span></p>
+            <Input 
+                label="Nombre para este lugar guardado:"
+                type="text"
+                value={saveLocationName}
+                onChange={(e) => setSaveLocationName(e.target.value)}
+                placeholder="Ej: Restaurante cena especial"
+                className="mb-4"
+                required
+            />
+            <div className="flex justify-end space-x-2">
+                <Button variant="secondary" onClick={() => setShowSaveLocationModal(null)}>Cancelar</Button>
+                <Button onClick={handleSaveLocation}>Guardar Lugar</Button>
+            </div>
+        </Modal>
+      )}
+
+      {markedMapLocations.length > 0 && (
+        <Card>
+          <h2 className="text-xl font-semibold text-slate-100 mb-4">Mis Lugares Guardados</h2>
+          <div className="space-y-3">
+            {markedMapLocations.map(loc => (
+              <div key={loc.id} className="bg-slate-700 p-3 rounded-md flex justify-between items-center">
+                <div>
+                  <p className="font-medium text-slate-100">{loc.name}</p>
+                  <p className="text-xs text-slate-400 italic" title={loc.query}>Búsqueda: {loc.query.length > 30 ? loc.query.substring(0,27)+'...' : loc.query}</p>
+                </div>
+                <div className="space-x-2 flex-shrink-0 flex items-center">
+                  <button 
+                    onClick={() => openGoogleMaps(loc.query)} 
+                    title="Ver en Google Maps" 
+                    aria-label="Ver en Google Maps"
+                    className="p-1.5 text-slate-300 hover:text-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 focus:ring-offset-slate-800 rounded-md transition-colors"
+                  >
+                    <MapPinIcon className="w-5 h-5"/>
+                  </button>
+                  <button 
+                    onClick={() => deleteMarkedMapLocation(loc.id)} 
+                    title="Eliminar lugar guardado" 
+                    aria-label="Eliminar lugar guardado"
+                    className="p-1.5 text-slate-300 hover:text-red-500 focus:outline-none focus:ring-2 focus:ring-red-600 focus:ring-offset-2 focus:ring-offset-slate-800 rounded-md transition-colors"
+                  >
+                    <TrashIcon className="w-5 h-5"/>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+       {markedMapLocations.length === 0 && (
+         <p className="text-sm text-center text-slate-400 mt-4">No tienes lugares guardados para este viaje. ¡Realiza una búsqueda y guárdala!</p>
+       )}
+    </div>
   );
 };
 

@@ -122,3 +122,12 @@ export interface ItineraryItem {
   addedBy: string; // Participant name
   createdAt: string; // ISO date string
 }
+
+// --- New Types for "MAPAS" ---
+export interface MarkedLocation {
+  id: string;
+  tripId: string;
+  name: string; // User-defined name for the marked location
+  query: string; // The search query used for Google Maps
+  addedAt: string; // ISO date string
+}
